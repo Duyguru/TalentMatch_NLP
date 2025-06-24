@@ -1,3 +1,4 @@
+from langdetect import detect
 import spacy
 import re
 from typing import Dict, List, Optional
@@ -18,69 +19,57 @@ class CVInfo:
     summary: str  # Özet
 
 def extract_name(text: str) -> str:
-    """spaCy NER kullanarak CV'den isim çıkarma"""
+    email = extract_email(text)
+    if email:
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if email in line:
+                if i > 0:
+                    name_candidate = lines[i - 1].strip()
+                    if 2 <= len(name_candidate.split()) <= 4:  # örn: "Duygu Er"
+                        return name_candidate
+    # Fallback: spaCy
     doc = nlp(text)
     for ent in doc.ents:
-        if ent.label_ == "PERSON":
+        if ent.label_ == "PERSON" and "dil" not in ent.text.lower():
             return ent.text
     return ""
-
 def extract_email(text: str) -> str:
-    """Regex kullanarak e-posta çıkarma"""
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    match = re.search(email_pattern, text)
-    return match.group(0) if match else ""
+    text = text.replace("LANGUAGES", "").replace("Languages", "")
+
+    emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+    return emails[0] if emails else ""
+
 
 def extract_phone(text: str) -> Optional[str]:
-    """Regex kullanarak telefon numarası çıkarma"""
-    phone_pattern = r'\+?[\d\s-]{10,}'
-    match = re.search(phone_pattern, text)
+    phone_pattern = r'(\+90\s*\d{3}\s*\d{3}\s*\d{4})|(\d{10,11})'
+    match = re.search(phone_pattern, text.replace('-', '').replace(' ', ''))
     return match.group(0) if match else None
 
+
 def extract_education(text: str) -> List[Dict]:
-    """spaCy ve regex kullanarak eğitim bilgilerini çıkarma"""
     education = []
-    # Eğitim bölümünü bul
-    edu_pattern = r'(?i)(education|academic|university|college|eğitim|üniversite).*?(?=\n\n|\Z)'
-    edu_section = re.search(edu_pattern, text, re.DOTALL)
+    lines = text.lower().split('\n')
+    keywords = ["üniversite", "university", "fakülte", "bölüm", "yüksekokul", "yüksek lisans", "lisans", "lise"]
     
-    if edu_section:
-        doc = nlp(edu_section.group(0))
-        # Tarihleri ve kurumları çıkar
-        for ent in doc.ents:
-            if ent.label_ in ["ORG", "DATE"]:
-                education.append({
-                    "institution": ent.text if ent.label_ == "ORG" else "",
-                    "date": ent.text if ent.label_ == "DATE" else ""
-                })
-    
+    for line in lines:
+        if any(keyword in line for keyword in keywords):
+            education.append({"institution": line.strip(), "date": ""})
     return education
 
+
 def extract_experience(text: str) -> List[Dict]:
-    """spaCy ve regex kullanarak iş deneyimini çıkarma"""
     experience = []
-    # Deneyim bölümünü bul
-    exp_pattern = r'(?i)(experience|work|employment|deneyim|iş).*?(?=\n\n|\Z)'
-    exp_section = re.search(exp_pattern, text, re.DOTALL)
+    lines = text.lower().split('\n')
+    exp_keywords = ["staj", "çalıştı", "intern", "developer", "engineer", "mühendis", "şirket", "firm", "company"]
     
-    if exp_section:
-        doc = nlp(exp_section.group(0))
-        # Şirketleri, tarihleri ve pozisyonları çıkar
-        current_exp = {}
-        for ent in doc.ents:
-            if ent.label_ == "ORG":
-                if current_exp:
-                    experience.append(current_exp)
-                current_exp = {"company": ent.text}
-            elif ent.label_ == "DATE":
-                current_exp["date"] = ent.text
-            elif ent.label_ == "WORK_OF_ART":
-                current_exp["position"] = ent.text
-        
-        if current_exp:
-            experience.append(current_exp)
-    
+    for line in lines:
+        if any(k in line for k in exp_keywords):
+            experience.append({"company": line.strip()})
     return experience
+
+    
+  
 
 def extract_skills(text: str) -> List[str]:
     """spaCy ve önceden tanımlanmış beceri kalıpları kullanarak becerileri çıkarma"""
@@ -101,18 +90,23 @@ def extract_skills(text: str) -> List[str]:
     return list(set(skills))
 
 def generate_summary(text: str) -> str:
-    """Transformers kullanarak özet çıkarma"""
-    summarizer = pipeline("summarization")
-    # Metni çok uzunsa parçalara böl
+    if not isinstance(text, str):
+        text = text.decode("utf-8", errors="ignore")
+
+    if detect(text) != "en":
+        return "Özetleme yalnızca İngilizce CV'ler için kullanılabilir."
+
+    summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
     max_chunk_length = 1024
     chunks = [text[i:i + max_chunk_length] for i in range(0, len(text), max_chunk_length)]
-    
+
     summaries = []
     for chunk in chunks:
         summary = summarizer(chunk, max_length=130, min_length=30, do_sample=False)
         summaries.append(summary[0]['summary_text'])
-    
+
     return " ".join(summaries)
+
 
 def parse_cv(text: str) -> CVInfo:
     """CV'yi ayrıştırıp tüm bilgileri çıkaran ana fonksiyon"""
