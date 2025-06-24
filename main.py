@@ -10,6 +10,9 @@ from cv_parser import parse_cv
 from vector_matcher import VectorMatcher
 from database import Database
 from notifications import NotificationService
+import os
+from fastapi.encoders import jsonable_encoder
+
 
 app = FastAPI(
     title="TalentMatch NLP API",
@@ -61,29 +64,34 @@ async def upload_cv(file: UploadFile = File(...)):
     """
     CV dosyası yükleme ve işleme (PDF/DOCX)
     """
-    if not file.filename.endswith(('.pdf', '.docx')):
-        raise HTTPException(status_code=400, detail="Sadece PDF ve DOCX dosyaları kabul edilir")
-    
+    if not file.filename.lower().endswith(('.pdf', '.docx')):
+     raise HTTPException(status_code=400, detail="Sadece PDF ve DOCX dosyaları kabul edilir")
+
     try:
         # Dosya içeriğini oku
         file_content = await file.read()
         
         # Belgeyi işle
-        text = process_document(file_content, file.filename)
+        
+        ext = os.path.splitext(file.filename)[1]
+        text = process_document(file_content, ext)
         
         # CV'yi ayrıştır
         cv_info = parse_cv(text)
         
         # Veritabanına kaydet
-        cv_id = db.store_cv(cv_info.__dict__, file_content, file.filename)
+        cv_id = str(db.store_cv(cv_info.__dict__, file_content, file.filename))
+
         
         return {
-            "message": "CV başarıyla yüklendi ve işlendi",
-            "cv_id": cv_id,
-            "parsed_info": cv_info.__dict__
-        }
+         "message": "CV başarıyla yüklendi ve işlendi",
+         "cv_id": cv_id,
+         "parsed_info": jsonable_encoder(cv_info)
+          }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+     import traceback
+     traceback.print_exc()
+     raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/job-posting")
 async def create_job_posting(job: JobPosting):
